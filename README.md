@@ -1,2 +1,1 @@
-# padelrex-test
-Padelrex TEST - test copy, not for people. Productio: https://padelrex.ee
+# Padelrex TEST — тестовая копия. Не для людей. Рабочая версия: https://padelrex.ee
