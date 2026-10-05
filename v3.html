@@ -2915,7 +2915,12 @@ render();boot();
 function show(){var d=document.getElementById("dbg");if(!d){d=document.createElement("div");d.id="dbg";document.body.appendChild(d);}d.textContent="debug · "+navigator.userAgent.replace(/^.*?\(/,"(").slice(0,60)+"\n"+window.DBG.slice(-15).join("\n");d.scrollTop=1e6;}
 window.onDbg=show;window.addEventListener("error",function(e){(window.dbg||function(m){window.DBG.push(m)})("JS error: "+e.message);show();});
 window.addEventListener("unhandledrejection",function(e){(window.dbg||function(m){window.DBG.push(m)})("promise: "+((e.reason&&(e.reason.code||e.reason.message))||e.reason));show();});
-document.addEventListener("DOMContentLoaded",show);})();
+document.addEventListener("DOMContentLoaded",show);
+/* #33: ?debug=1 — размеры элементов шапки (для старых устройств без Web Inspector) */
+setTimeout(function(){try{var t=document.getElementById("top");if(!t)return;var L=["cls: "+document.documentElement.className+" w="+innerWidth];
+  for(var i=0;i<t.children.length;i++){var e=t.children[i],r=e.getBoundingClientRect(),cs=getComputedStyle(e);L.push((e.className||e.tagName).toString().slice(0,14)+" x"+Math.round(r.left)+" y"+Math.round(r.top)+" "+Math.round(r.width)+"×"+Math.round(r.height)+" "+cs.display+" ml"+cs.marginLeft);}
+  var a=t.querySelector(".acct svg");if(a){var r2=a.getBoundingClientRect();L.push("acct svg "+Math.round(r2.width)+"×"+Math.round(r2.height));}
+  window.DBG.push(L.join("\n"));show();}catch(e){window.DBG.push("dbg2 "+e.message);show();}},2500);})();
 </script>
 </body></html>
 <script>
