@@ -1304,7 +1304,7 @@ async function flush(){
       S._c=CID;S._w=Date.now();lastW=S._w;
       const cur=clone(S);delete cur.scores;if(cur.money)delete cur.money.paid;
       const patch={};let n=0;const fresh=!Object.keys(lastMain).length,org=isOrg();
-      if(VCUR!==null&&!org){if(SHCUR===null)delete cur.cur;else cur.cur=SHCUR;}   /* R9: свой просмотр раунда в базу не пишем */
+      if(VCUR!==null){if(SHCUR===null)delete cur.cur;else cur.cur=SHCUR;}   /* R9: свой просмотр раунда в базу не пишем (R32: и организатор, вошедший после просмотра гостем) */
       /* только то, что изменили здесь (сравнение с последним применённым состоянием), — чужие изменения не затираем (#31.10);
          участник пишет только ход игры (#31.1) */
       for(const k in cur){const j=JSON.stringify(cur[k]);if((FORCE.has(k)||(APPLIED[k]!==undefined?APPLIED[k]:lastMain[k])!==j)&&(org||PLAY_KEYS.has(k))){patch[k]=cur[k];n++;}}
@@ -1332,7 +1332,8 @@ async function flush(){
   if(!dirty&&PENDING){const p=PENDING;PENDING=null;remote(p,PENDP);}
 }
 const PLAY_KEYS=new Set(["cur","rounds","timer","finished","rStart","_c","_w"]);
-let VCUR=null,SHCUR=null;  /* R9: VCUR — раунд, который участник/зритель листает у себя (null — общий); SHCUR — общий раунд из базы */
+let VCUR=null,SHCUR=null,MEMSEEN=false;  /* R32 C: MEMSEEN — на этой загрузке страницы был вход участника. R9: VCUR — раунд, который участник/зритель листает у себя (null — общий); SHCUR — общий раунд из базы */
+function dropView(){if(VCUR===null||!isOrg())return;S.cur=SHCUR!==null&&S.rounds&&S.rounds[SHCUR]?SHCUR:0;VCUR=null;}   /* R32 (HOSTILE-1 F1): вошёл организатором — свой просмотр раунда снят, экран на общем раунде; r3 F1: общего раунда нет в списке -> раунд 1, как vRound:8 у всех (раунд гостя в базу не попадёт) */
 let APPLIED={},PENDING=null,PENDP=false,lastData=null,CONF={},PWD=new Set(),FORCE=new Set(),INFL={};  /* INFL — сколько записей ключа ещё в пути */  /* FORCE — ключи обратной записи после «Отменить» */  /* CONF — подтверждённые базой значения полей (без своих неподтверждённых записей) */
 /* #37: неподтверждённые записи — основной документ (PW, по ключу) и счёт (PS, по матчу) */
 let PW={},PS={},WSEQ=0;const SAVE_TO=window.__saveTO||10000;
@@ -1428,7 +1429,7 @@ async function boot(){
   try{if(window.claude&&typeof window.claude.use==="function")dbx=await window.claude.use("db");}catch(e){dbx=null;}
   if(dbx){
     db=dbx;LOCAL=false;mainRef=db.doc("t/main");
-    if(window.PAUTH){window.PAUTH.lang(S.lang);window.PAUTH.onChange(u=>{UID=u&&u.uid;if(profUnsub){profUnsub();profUnsub=null;}PROF=null;if(u&&!u.isAnonymous){profUnsub=window.PAUTH.watchProfile(p=>{PROF=p;if(p&&p.name&&UID)UN[UID]=p.name;if(!BOOT){softRender();renderLayer();}});}if(!BOOT){render();renderLayer();}});{const u0=window.PAUTH&&window.PAUTH.user();if(u0&&!u0.isAnonymous&&!profUnsub){UID=u0.uid;profUnsub=window.PAUTH.watchProfile(p=>{PROF=p;if(p&&p.name&&UID)UN[UID]=p.name;if(!BOOT){softRender();renderLayer();}});}}}
+    if(window.PAUTH){window.PAUTH.lang(S.lang);window.PAUTH.onChange(u=>{UID=u&&u.uid;if(window.PAUTH.isMember())MEMSEEN=true;dropView();if(profUnsub){profUnsub();profUnsub=null;}PROF=null;if(u&&!u.isAnonymous){profUnsub=window.PAUTH.watchProfile(p=>{PROF=p;if(p&&p.name&&UID)UN[UID]=p.name;if(!BOOT){softRender();renderLayer();}});}if(!BOOT){render();renderLayer();}});{const u0=window.PAUTH&&window.PAUTH.user();if(u0&&window.PAUTH.isMember())MEMSEEN=true;if(u0&&!u0.isAnonymous&&!profUnsub){UID=u0.uid;profUnsub=window.PAUTH.watchProfile(p=>{PROF=p;if(p&&p.name&&UID)UN[UID]=p.name;if(!BOOT){softRender();renderLayer();}});}}}
     try{const u=await window.claude.use("user");if(u){USER=u;const w=await u.can("data.write");if(w===false)RO=true;try{UID=await u.id();}catch(e){}}}catch(e){}
     db.collection("scores").onSnapshot(qs=>{const m={},meta={},au={};qs.docs.forEach(d=>{const x=d.data();if(!x)return;m[d.id]=[n3(x.a),n3(x.b)];if(x.gp==="a"||x.gp==="b")m[d.id].push(x.gp);meta[d.id]={by:typeof x.by==="string"?x.by:null,at:+x.at||0};au[d.id]=x.au===0||x.au===1?x.au:null;});
       const ssc={};qs.docs.forEach(d=>{const x=d.data();if(!x)return;if(d.pending&&(SSC[d.id]||PS[d.id])){ssc[d.id]=SSC[d.id]||Object.assign({},SC0);return;} /* своя неподтверждённая — не «подтверждено» */
@@ -2997,7 +2998,7 @@ function scoreAccept(key,x,pv0){if(LOCAL||!db||RO||ACC[key])return;   /* pv0 —
         try{if(u){scoreBase(key,X,u.pv,u.v);if(!PS[key]){const s=scoreView(key);S.scores[key]=s.v;AU[key]=s.au;SCMETA[key]={by:me,at:Date.now()};}}}
         finally{end();}},fail);},fail);}
 function autoNext(){if(S.phase==="play")return;const at=step;setTimeout(()=>{if(step===at&&step<STEPS.length-1){step++;ls.set("pfn_step",String(step));render();$("#content").scrollTop=0;}},320);}
-const VIEW_ACTS=new Set(["lkinfo","syncretry","syncdrop","reload","mytour","opent","homereg","tab","ovclose","allr","home","intro","pickclose","cno","regclose","copylink","pwainstall","pwaios","avopen","thmode","acct","step","gostep","lang"]);
+const VIEW_ACTS=new Set(["lkinfo","syncretry","syncdrop","reload","mytour","opent","homereg","tab","ovclose","allr","home","intro","pickclose","cno","regclose","copylink","pwainstall","pwaios","avopen","thmode","acct","step","gostep","lang","goround"]);   /* R32: гость листает раунды без входа (у не-организатора раунд меняется только на его экране, :27) */
 function act(a,d,el){
   if(pxAct(a,d,el))return;
   if(a.startsWith("au")||a==="authclose"){authAct(a,d);return;}
@@ -3022,7 +3023,8 @@ function act(a,d,el){
   if(AUTHON()&&GAME_ACTS.has(a)&&!isOrg()&&!isPlayerMe()){toast(p5("play_only"));return;}
   if(a==="orgadd"||a==="orgrm"){if(!isOrg())return;const o=(S.orgs||[]).slice();if(a==="orgadd"&&!o.includes(d.v))o.push(d.v);if(a==="orgrm"&&d.v!==S.owner){const i=o.indexOf(d.v);if(i>=0)o.splice(i,1);}S.orgs=o;save();render();return;}
   if(a==="tab"){tab=d.v;render();$("#content").scrollTop=0;return;}
-  if(a==="goround"){S.cur=+d.r;lastCur=S.cur;if(!AUTHON()||isOrg()){VCUR=null;save();}else VCUR=S.cur===SHCUR?null:S.cur;render();return;}   /* R9: общий раунд листает только организатор */
+  if(a==="goround"){if(AUTHON()&&!canWrite()&&MEMSEEN){const u=ME();openAuth(u&&!u.isAnonymous?"verify":"login",at("need"));return;}   /* R32 re-plan C (owner «да» 17:42): на странице, где в эту загрузку был вход участника, раунд без прав — как в 3ca41cd (окно входа), так неотправленный выбор организатора не теряется; гость по ссылке листает свободно */
+  S.cur=+d.r;lastCur=S.cur;if(!AUTHON()||isOrg()){VCUR=null;save();}else VCUR=S.cur===SHCUR?null:S.cur;render();return;}   /* R9: общий раунд листает только организатор */
   if(a==="ovclose"){ovShow=false;clearTimeout(ovT);renderLayer();return;}
   if(a==="allr"){showAll=!showAll;render();return;}
   if(a==="pick"){if(RO)return;pickFor={c:+d.c,s:+d.s,r:d.r==null?S.cur:+d.r};renderLayer();return;}   /* C1-2: запоминаем раунд */
