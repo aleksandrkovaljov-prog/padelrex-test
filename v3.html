@@ -762,7 +762,8 @@ button.pav.m-pav{cursor:pointer;padding:0;border:0}
       auth.getRedirectResult().catch(function(){});
       auth.onAuthStateChanged(function(u){
         cur=u;
-        if(!u){auth.signInAnonymously().catch(function(e){if(first){first=false;rej(e);}});return;}
+        if(!u){park();auth.signInAnonymously().catch(function(e){if(first){first=false;rej(e);}else parked.forEach(function(k){if(!k.off)k.err(e);});});return;}
+        if(parked.length)parked.splice(0).forEach(function(k){try{k.on();}catch(e){}});
         if(first){first=false;res();}
         if(!u.isAnonymous)seed().catch(function(){});
         emit();
@@ -770,6 +771,21 @@ button.pav.m-pav{cursor:pointer;padding:0;border:0}
       setTimeout(function(){if(first){first=false;rej(new Error("auth timeout"));}},12000);
     });
     return ready;
+  }
+  /* R35 (PROBLEMS 20.11 15:50): после выхода чтение без входа запрещено (firestore.rules:84) — живая подписка получает отказ
+     и больше ничего не получает, страница показывала «Не сохранилось». Как обычно делают с Firebase: при выходе (пользователь
+     null) подписки снимаются и ставятся заново, когда придёт следующий пользователь (новый аноним). Отказ, пришедший без
+     пользователя, — тоже ждёт следующего. Отказ при пользователе — настоящий: как раньше, вызов err (вход гостя в аккаунт
+     подписки не трогает). Не удался анонимный вход после выхода — err ждущих подписок, как раньше («Не сохранилось»). */
+  var live=[],parked=[];
+  function park(){live=live.filter(function(k){return !k.off;});live.forEach(function(k){k.n++;if(k.un){try{k.un();}catch(e){}k.un=null;}if(parked.indexOf(k)<0)parked.push(k);});}
+  function keep(sub,err){
+    var k={un:null,off:false,n:0,err:err||function(){}};   /* n: номер текущей подписки — ответ снятой (старой) не учитываем */
+    k.on=function(){if(k.off)return;var my=++k.n;k.un=sub(function(e){if(k.off||my!==k.n)return;
+      if(e&&e.code==="permission-denied"&&!auth.currentUser){k.un=null;if(parked.indexOf(k)<0)parked.push(k);return;}
+      k.err(e);});};
+    k.on();live.push(k);
+    return function(){k.off=true;if(k.un)k.un();k.un=null;};
   }
   function wrapDocSnap(s){return {id:s.id,exists:s.exists,pending:!!(s.metadata&&s.metadata.hasPendingWrites),data:function(){var d=s.data();return d?dec(d):undefined;}};}
   function wrapDoc(ref){return {
@@ -780,11 +796,11 @@ button.pav.m-pav{cursor:pointer;padding:0;border:0}
     tx:function(fn){return fs.runTransaction(function(t){return t.get(ref).then(function(sn){var cur=sn.exists?dec(sn.data()):null;var upd=fn(cur);if(upd)t.set(ref,enc(upd),{merge:true});return upd;});});},
     delete:function(){return ref.delete();},
     get:function(){return ref.get().then(wrapDocSnap);},
-    onSnapshot:function(ok,err){return ref.onSnapshot(function(s){ok(wrapDocSnap(s));},err||function(){});}
+    onSnapshot:function(ok,err){return keep(function(e){return ref.onSnapshot(function(s){ok(wrapDocSnap(s));},e);},err);}
   };}
   function wrapCol(ref){return {
     doc:function(id){return wrapDoc(ref.doc(id));},
-    onSnapshot:function(ok,err){return ref.onSnapshot(function(qs){ok({docs:qs.docs.map(wrapDocSnap)});},err||function(){});}
+    onSnapshot:function(ok,err){return keep(function(e){return ref.onSnapshot(function(qs){ok({docs:qs.docs.map(wrapDocSnap)});},e);},err);}
   };}
   async function seed(){
     if(!cur||cur.isAnonymous||!isMember()||CODE!=="ik0310")return;
@@ -1679,6 +1695,7 @@ function at(k,v){let x=(AT[S.lang]||AT.ru)[k];if(x===undefined)x=AT.ru[k]||k;if(
 const AUTHON=()=>!!window.PAUTH&&!LOCAL;
 const ME=()=>window.PAUTH?window.PAUTH.user():null;
 function canWrite(){return !AUTHON()||window.PAUTH.isMember();}
+function viewOnly(){if(RO)return true;if(canWrite())return false;const u=ME();return !(u&&!u.isAnonymous);}   /* R33 (владелец 20.11 20:22): гость без входа видит только ход игры — тот же вид, что режим просмотра RO; права записи не меняются (25_actions.js:22). Вошёл, но почта не подтверждена — как раньше: кнопки, нажатие ведёт к подтверждению (свежее чтение P3-3) */
 function isOrg(){if(!AUTHON())return true;if(!window.PAUTH.isMember())return false;const o=S.orgs||[];if(!S.owner&&!o.length)return true;return o.includes(UID)||S.owner===UID;}
 const GAME_ACTS=new Set(["sinc","pick","pickv","lrswap","tstart","tpause","treset","next","paid","gp"]);
 function isPlayerMe(){return !!UID&&Object.values(REG).some(r=>r&&r.uid===UID&&r.st!=="out");}
@@ -1819,7 +1836,7 @@ function top(){
   const logo=`<div class="logo" data-act="home" style="cursor:pointer" aria-label="Immortal Kombat">${wordmark()}</div>`; /* шапка одинаковая во всех темах (#28) */
   return `${logo}${window.ENV==="test"?`<span class="envtest">TEST</span>`:""}<div class="sp"></div>${b}${acctBtn()}<div class="langs">${["en","et","ru"].map(l=>`<button data-act="lang" data-v="${l}" class="${S.lang===l?"on":""}">${l.toUpperCase()}</button>`).join("")}</div>`;
 }
-const dis=()=>RO?"disabled":"";
+const dis=()=>viewOnly()?"disabled":"";
 function stepper(label,path,val,min,max,d){return `<div class="stp"><span>${label}</span><div class="ctl"><button data-act="inc" data-path="${path}" data-d="${-d}" data-min="${min}" data-max="${max}" ${dis()} aria-label="−">−</button><b>${val}</b><button data-act="inc" data-path="${path}" data-d="${d}" data-min="${min}" data-max="${max}" ${dis()} aria-label="+">+</button></div></div>`;}
 
 function vCount(){
@@ -1886,37 +1903,37 @@ function vSummary(){
 /* play views */
 function fmtT(ms){ms=Math.max(0,ms);const s=Math.ceil(ms/1000);return String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0");}
 function timeLeft(){const tm=S.timer;return tm.running?tm.endsAt-Date.now():tm.left;}
-function teamRow2(ids,win,c,side){return `<div class="team ${win?"win":""}" style="grid-template-columns:auto 1fr auto"><div class="duo">${ids.map(id=>av(id,"s")).join("")}</div><div class="tn">${ids.map((id,i)=>`<div><span class="lr">${i?t("right_s"):t("left_s")}</span>${nm(id)}${nk(id)?` <small style="display:inline">· ${nk(id)}</small>`:""}</div>`).join("")}</div>${RO||c==null?"":`<button class="swp" data-act="lrswap" data-c="${c}" data-s="${side}" aria-label="⇄">⇄</button>`}</div>`;}
+function teamRow2(ids,win,c,side){return `<div class="team ${win?"win":""}" style="grid-template-columns:auto 1fr auto"><div class="duo">${ids.map(id=>av(id,"s")).join("")}</div><div class="tn">${ids.map((id,i)=>`<div><span class="lr">${i?t("right_s"):t("left_s")}</span>${nm(id)}${nk(id)?` <small style="display:inline">· ${nk(id)}</small>`:""}</div>`).join("")}</div>${viewOnly()||c==null?"":`<button class="swp" data-act="lrswap" data-c="${c}" data-s="${side}" aria-label="⇄">⇄</button>`}</div>`;}
 function serveLine(mt){const n=S.scoring.serves||servesDefault();const o=[mt.a[0],mt.b[0],mt.a[1],mt.b[1]];return `<div class="srv">${ic("ball")} ${t("serve")}: ${o.map(nm).join(" → ")} · ${t("serve_n",{n:n})}</div>`;}
 function servesDefault(){return 2;}
 function vRound(){
   if(!S.rounds[S.cur])S.cur=0;
   const r=S.cur,rd=S.rounds[r],R=Math.max(S.plan.rounds,S.rounds.length),s=S.scoring;
   const chips=[];for(let i=0;i<S.rounds.length;i++)chips.push(`<button class="${i===r?"on":""} ${roundDone(i)?"done":""}" data-act="goround" data-r="${i}">${i+1}</button>`);
-  const timer=s.mode==="time"?`<div class="timer"><div class="t" id="tm">${fmtT(timeLeft())}</div><div class="hbar"><i id="hb" style="width:100%"></i></div>${RO?"":`<div class="row">${S.timer.running?`<button class="btn sm" data-act="tpause">❚❚ ${t("pause")}</button>`:`<button class="btn sm pri" data-act="tstart">▶ ${t("start")}</button>`}<button class="btn sm ghost" data-act="treset">↺ ${t("reset")}</button></div>`}</div>`:`<div class="info">${t("to_points",{p:s.points})}</div>`;
+  const timer=s.mode==="time"?`<div class="timer"><div class="t" id="tm">${fmtT(timeLeft())}</div><div class="hbar"><i id="hb" style="width:100%"></i></div>${viewOnly()?"":`<div class="row">${S.timer.running?`<button class="btn sm" data-act="tpause">❚❚ ${t("pause")}</button>`:`<button class="btn sm pri" data-act="tstart">▶ ${t("start")}</button>`}<button class="btn sm ghost" data-act="treset">↺ ${t("reset")}</button></div>`}</div>`:`<div class="info">${t("to_points",{p:s.points})}</div>`;
   const courts=rd.m.map((mt,c)=>{const v=sc(r,c)||[null,null];const tie=S.format==="king"&&kingTie(v);const aw=v[0]!=null&&v[1]!=null&&(v[0]>v[1]||tie&&v[2]==="a"),bw=v[0]!=null&&v[1]!=null&&(v[1]>v[0]||tie&&v[2]==="b");
     const pm=!V2()||S.scoreUI==="pm",lo=!LOCAL&&!!db&&lockOther(r+"_"+c);   /* матч ведёт другой телефон — только просмотр */
-    const box=side=>`<div class="score ${pm?"":"nopm"}">${RO||!pm||lo?"":`<button data-act="sinc" data-r="${r}" data-c="${c}" data-s="${side}" data-d="-1" aria-label="−">−</button>`}<input type="number" inputmode="numeric" readonly data-act="${lo?"lkinfo":"pick"}" data-k="${r}_${c}" data-r="${r}" data-c="${c}" data-s="${side}" id="s_${r}_${c}_${side}" data-in="score" value="${v[side]==null?"":v[side]}" min="0" ${dis()}>${RO||!pm||lo?"":`<button data-act="sinc" data-r="${r}" data-c="${c}" data-s="${side}" data-d="1" aria-label="+">+</button>`}</div>`;
+    const box=side=>`<div class="score ${pm?"":"nopm"}">${viewOnly()||!pm||lo?"":`<button data-act="sinc" data-r="${r}" data-c="${c}" data-s="${side}" data-d="-1" aria-label="−">−</button>`}<input type="number" inputmode="numeric" readonly data-act="${lo?"lkinfo":"pick"}" data-k="${r}_${c}" data-r="${r}" data-c="${c}" data-s="${side}" id="s_${r}_${c}_${side}" data-in="score" value="${v[side]==null?"":v[side]}" min="0" ${dis()}>${viewOnly()||!pm||lo?"":`<button data-act="sinc" data-r="${r}" data-c="${c}" data-s="${side}" data-d="1" aria-label="+">+</button>`}</div>`;
     return `<div class="court"><div class="chead"><b>${t("court")} ${c+1}</b><small>${esc(S.courts[c]&&S.courts[c].name||"")}</small></div>${teamRow2(mt.a,aw,c,0)}<div class="sbar">${box(0)}<div class="vs2">VS</div>${box(1)}</div>${teamRow2(mt.b,bw,c,1)}${tie?gpLine(mt,v,c):""}${serveLine(mt)}${metaLine(r+"_"+c)}${lockLine(r+"_"+c)}${altLines(r+"_"+c,v,mt)}</div>`;}).join("");
   const last=r>=R-1&&r===S.rounds.length-1;
   const restL=rd.rest&&rd.rest.length?`<div class="restline">${S.format==="king"?p5("queue"):t("resting")}: ${rd.rest.map(nm).join(", ")}</div>`:"";
   return `<div class="rtitle"><h1>${t("round",{r:r+1})}</h1><span>${t("of",{n:R})}</span></div><div class="rchips">${chips.join("")}</div>${timer}${courts}${restL}
-  ${RO||!(isOrg()||!canWrite())?"":`<div class="row"><button class="btn pri big" data-act="next">${last?t("finish"):t("next_round")} →</button></div>`}${RO?`<p class="hint">${t("ro_note")}</p>`:""}`;
+  ${viewOnly()||(!isOrg()&&canWrite())?"":`<div class="row"><button class="btn pri big" data-act="next">${last?t("finish"):t("next_round")} →</button></div>`}${viewOnly()?`<p class="hint">${t("ro_note")}</p>`:""}`;
 }
 function kingTie(v){return !!v&&v[0]!=null&&v[1]!=null&&v[0]===v[1];}
-function gpLine(mt,v,c){const b=(side,ids)=>`<button class="btn sm ${v[2]===side?"pri":""}" data-act="gp" data-c="${c}" data-v="${side}" ${RO?"disabled":""}>${ids.map(nm).join(" & ")}</button>`;
+function gpLine(mt,v,c){const b=(side,ids)=>`<button class="btn sm ${v[2]===side?"pri":""}" data-act="gp" data-c="${c}" data-v="${side}" ${viewOnly()?"disabled":""}>${ids.map(nm).join(" & ")}</button>`;
   return `<div class="gpline"><div class="lbl">${p5("gp_q")}</div><div class="row">${b("a",mt.a)}${b("b",mt.b)}</div></div>`;}
 function kingNeedGp(r){return S.format==="king"&&S.rounds[r]&&S.rounds[r].m.some((_,c)=>{const v=sc(r,c);return kingTie(v)&&v[2]!=="a"&&v[2]!=="b";});}
 function hhmm(at){const tm=new Date(at);return String(tm.getHours()).padStart(2,"0")+":"+String(tm.getMinutes()).padStart(2,"0");}
 /* владелец 20.11 05:10: кто ведёт матч; другие записи счёта (другой счёт — рядом, с кем и когда; выбирает ведущий) */
-function lockLine(key){if(LOCAL||!db)return "";const l=LK[key];if(!l)return "";const org=isOrg()&&!RO;
-  if(lockMine(key))return `<div class="meta lkline">${t("sc_you_hold")}${RO?"":` <button class="btn sm ghost" data-act="lkfree" data-k="${key}">${t("lk_free")}</button>`}</div>`;
+function lockLine(key){if(LOCAL||!db)return "";const l=LK[key];if(!l)return "";const org=isOrg()&&!viewOnly();
+  if(lockMine(key))return `<div class="meta lkline">${t("sc_you_hold")}${viewOnly()?"":` <button class="btn sm ghost" data-act="lkfree" data-k="${key}">${t("lk_free")}</button>`}</div>`;
   return `<div class="meta lkline">🔒 ${esc(t("sc_held",{n:whoName(l.by)}))}${org?` <button class="btn sm" data-act="lktake" data-k="${key}">${t("lk_take")}</button> <button class="btn sm ghost" data-act="lkfree" data-k="${key}">${t("lk_free")}</button>`:""}</div>`;}
 function altLines(key,v,mt){if(LOCAL||!db)return "";const res={a:v[0],b:v[1],gp:v[2]||null};
   return (ALT[key]||[]).filter(x=>!scoreSame(x,res)).map(x=>{const mine=x.by===(UID||null);
     const s=`${x.a==null?"–":x.a}:${x.b==null?"–":x.b}${x.gp&&x.a!=null&&x.a===x.b?" · "+(x.gp==="a"?mt.a:mt.b).map(nm).join(" & "):""}`;
-    const ok=!RO&&altCanOk(key,x)?` <button class="btn sm pri" data-act="altok" data-k="${key}" data-id="${esc(x.id)}" data-v="${esc(String(scoreV(SSC[key])))}" data-x="${esc(altSig(x))}">${t("alt_ok")}</button>`:"";
-    const del=!RO&&(lockMine(key)||isOrg()||mine)?` <button class="btn sm ghost" data-act="altdel" data-k="${key}" data-id="${esc(x.id)}">${t("alt_del")}</button>`:"";
+    const ok=!viewOnly()&&altCanOk(key,x)?` <button class="btn sm pri" data-act="altok" data-k="${key}" data-id="${esc(x.id)}" data-v="${esc(String(scoreV(SSC[key])))}" data-x="${esc(altSig(x))}">${t("alt_ok")}</button>`:"";
+    const del=!viewOnly()&&(lockMine(key)||isOrg()||mine)?` <button class="btn sm ghost" data-act="altdel" data-k="${key}" data-id="${esc(x.id)}">${t("alt_del")}</button>`:"";
     return `<div class="meta altline">✎ ${mine?t("alt_mine"):esc(whoName(x.by))} · ${hhmm(x.at)}: <b>${s}</b>${ok}${del}</div>`;}).join("");}
 function metaLine(key){const m=SCMETA[key];if(!m||!m.at)return "";const tm=new Date(m.at);const hh=String(tm.getHours()).padStart(2,"0")+":"+String(tm.getMinutes()).padStart(2,"0");
   const who=m.by?(m.by===UID?t("you"):(UN[m.by]||t("someone"))):t("someone");return `<div class="meta">${t("entered")}: ${esc(who)} · ${hh}</div>`;}
@@ -1978,7 +1995,7 @@ function vMore(){
   ${vOrgs()}
   <div class="set" style="margin-top:12px"><button class="btn" data-act="copylink">${bi("copy")}${at("copy")}</button>${AUTHON()?`<button class="btn" data-act="acct">${window.PAUTH.isMember()?bi("user")+at("acct_me"):bi("user")+at("acct_in")}</button>`:""}</div>
   <button class="check ${S.sound?"on":""}" data-act="sound" ${dis()}><i>${S.sound?"✓":""}</i>${t("sound")}</button>
-  ${RO?`<p class="hint" style="margin-top:14px">${t("ro_note")}</p>`:`<button class="btn pri big" style="width:100%;margin-top:18px" data-act="${S.finished?"resume":"finnow"}">${S.finished?bi("back")+it("resume"):bi("flag")+it("fin")}</button><div class="set" style="margin-top:12px"><button class="btn" data-act="home">${bi("home")}${it("home")}</button><button class="btn" data-act="edit">${t("edit")}</button><button class="btn danger" data-act="ask" data-what="resetres">${t("reset_res")}</button>${V2()?"":`<button class="btn danger" data-act="ask" data-what="newt">${t("new_t")}</button>`}</div>`}
+  ${viewOnly()?`<p class="hint" style="margin-top:14px">${t("ro_note")}</p>`:`<button class="btn pri big" style="width:100%;margin-top:18px" data-act="${S.finished?"resume":"finnow"}">${S.finished?bi("back")+it("resume"):bi("flag")+it("fin")}</button><div class="set" style="margin-top:12px"><button class="btn" data-act="home">${bi("home")}${it("home")}</button><button class="btn" data-act="edit">${t("edit")}</button><button class="btn danger" data-act="ask" data-what="resetres">${t("reset_res")}</button>${V2()?"":`<button class="btn danger" data-act="ask" data-what="newt">${t("new_t")}</button>`}</div>`}
   ${LOCAL?`<p class="hint" style="margin-top:14px">${t("local_note")}</p>`:""}
   <p class="hint appver">Padelrex ${window.APPVER||""}${window.ENV==="test"?" · TEST":""}</p>`;
 }
@@ -2026,7 +2043,7 @@ function tick(){
   if(tm){tm.textContent=fmtT(left);tm.classList.toggle("low",left<60000);}
   if(hb)hb.style.width=Math.max(0,Math.min(100,left/full*100))+"%";
   if(S.timer.running&&left<=0){const key=S.cur+"_"+S.timer.endsAt;if(gongKey!==key){gongKey=key;gong();
-      if(!RO){S.timer={running:false,endsAt:0,left:0};save();setTimeout(render,50);}}}
+      if(!RO&&canWrite()){S.timer={running:false,endsAt:0,left:0};save();setTimeout(render,50);}}}   /* R34 (PROBLEMS 20.11 17:20): страница без права записи (гость) только показывает 00:00 — базе её запись не нужна и она отказала бы («не сохранено») */
 }
 setInterval(tick,250);
 /* embers (immortal skin only) */
